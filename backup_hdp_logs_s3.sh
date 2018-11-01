@@ -135,8 +135,12 @@ HADOOP_FS_PROPERTY=fs.defaultFS
 # Hadoop High Availablity property
 HADOOP_HA_PROPERTY=dfs.nameservices
 
+# Hadoop High Availability Server 1 Property
+HADOOP_HA_SERVER_1_PROPERTY="dfs.namenode.rpc-address.*.nn1"
+
 # YARN application logs directory in HDFS
 YARN_APP_LOG_DIR_HDFS=/app-logs
+
 #########################  Begin  #########################
 
 # Install dependecies
@@ -184,7 +188,7 @@ do
     HDP_LOGS_FOR_BACKUP=("${HDP_LOGS_FOR_BACKUP[@]}" "${log_dir}")
 done
 
-# Add yarn application logs to backup list
+# Add running yarn application logs to backup list
 if [ -d ${YARN_APPLICATION_LOGS_DIR} ]; then
 
     log_dirs=$(find ${YARN_APPLICATION_LOGS_DIR}/* -type d)
@@ -209,24 +213,26 @@ fi
 kerberos_enabled=$(grep -A 1 ${HADOOP_AUTH_PROPERTY} ${HADOOP_CONF_DIR}/core-site.xml | grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | grep "kerberos" | wc -l)
 
 # Check if namenode in HA
-namnenode_ha_enabled=$(grep -A 1 ${HADOOP_HA_PROPERTY} ${HADOOP_CONF_DIR}/core-site.xml | wc -l)
-
-#TODO IF HA ENABLED
+namnenode_ha_enabled=$(grep -A 1 ${HADOOP_HA_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml | wc -l)
 
 # NameNode HA not enabled
 if [ "$namnenode_ha_enabled" -eq "0" ]; then
-    namenode_server=$(grep -A1 ${HADOOP_FS_PROPERTY} /etc/hadoop/conf/core-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 2 | sed "s|\/||g")
+    namenode_server=$(grep -A1 ${HADOOP_FS_PROPERTY} ${HADOOP_CONF_DIR}/core-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 2 | sed "s|\/||g")
+# If NameNode HA is enabled
+else
+    namenode_server=$(grep -A1 ${HADOOP_HA_SERVER_1_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 1)
 fi
 
-
-NAMENODE_SERVER="no"
 # Download the historical YARN application logs from HDFS
+NAMENODE_SERVER="no"
 if [ "${HOSTNAME_FQ}" = "${namenode_server}" ]; then
 
     NAMENODE_SERVER="yes"
 
+    # Cluster is NOT kerberized
     if [ "$kerberos_enabled" -eq "0" ]; then
         su hdfs -c "hdfs dfs -get ${YARN_APP_LOG_DIR_HDFS} ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}"
+    # Cluster is kerberized
     else
 
         # Get the hdfs principal
@@ -276,8 +282,7 @@ else
 
      counter=$(( $counter - 1 ))
      sleep 5  
-done
-
+   done
 fi
 
 # Create the compressed backup of HDP log files
@@ -319,15 +324,15 @@ cd ${TEMP_BACKUP_DIR}
 # Zip files
 zip ${ZIPPED_BACKUP_FILE_NAME} ${TARS_FOR_ZIP[*]}
 
-# Change back to saved current directory
-cd ${current_dir}
-
 # export S3 Credentials
 export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
 export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 
 # Load backup to S3
 aws s3 cp ${TEMP_BACKUP_DIR}/${ZIPPED_BACKUP_FILE_NAME} s3://${AWS_S3_BUCKET}/${AWS_S3_FOLDER_FOR_BACKUPS}/${HDP_CLUSTER_NAME}/
+
+# Change back to saved current directory
+cd ${current_dir}
 
 # Cleanup
 rm -rf ${TEMP_BACKUP_DIR}
