@@ -241,6 +241,7 @@ if [ "${HOSTNAME_FQ}" = "${namenode_server}" ]; then
 	# kinit as hdfs principal
         kinit -kt ${HADOOP_KEYTAB_DIR}/${HDFS_HEADLESS_KEYTAB} ${hdfs_principal}
 
+	# Dowload the logs
         hdfs dfs -get ${YARN_APP_LOG_DIR_HDFS} ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}
 
 	# Destory kerberos ticket
