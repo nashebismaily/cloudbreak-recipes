@@ -1,13 +1,11 @@
-#!/bin/bash
-
-## Author: Nasheb Ismaily
+## Author: Hortonworks Federal - Professional Services
 ## 
 ## Description: Searches the HDP base log directory (/var/log) for any directories owned by HDP system groups.
 ##		Creates a list of all log files that need to be backed up.
 ##		Adds user specified logs owned by root system group to the list.
 ##		Tars the logs in the list with the name: hdp-logs.tar.gz
-##		Searches for yarn application logs and adds them to the list.
-##		Tars the logs in the list with the name: yarn-application-logs.tar.gz
+##		Searches for running yarn application logs and adds them to the list.
+##		Tars the logs in the list with the name: yarn-running-application-logs.tar.gz
 ##		Zips both tars together as: YYMMDD_HHmmSS-Hostname.zip
 ##		Installs awscli using pip
 ##		Copies zip file to s3 using awscli
@@ -31,8 +29,11 @@ AWS_S3_FOLDER_FOR_BACKUPS=
 # Top level directory to search for HDP logs
 HDP_LOG_BASE_DIR=/var/log
 
-# Directory containint ambari agent logs, used to obtain Ambari - HDP Cluster Name
+# Directory containing ambari agent logs, used to obtain Ambari - HDP Cluster Name
 AMBARI_AGENT_LOG_DIR=/var/log/ambari-agent
+
+# Directory containing ambari server logs, used to obtain Ambari - HDP Cluster Name
+AMBARI_SERVER_LOG_DIR=/var/log/ambari-server
 
 # Yarn application logs (yarn.nodemanager.log-dirs)
 YARN_APPLICATION_LOGS_DIR=/hadoop/yarn/log
@@ -91,7 +92,7 @@ HOSTNAME=$(hostname | cut -d "." -f 1)
 HDP_LOGS_BACKUP_FILE_NAME=hdp-logs
 
 # YARN application compressed backup filename
-YARN_APPLICATION_LOGS_BACKUP_FILE_NAME=yarn-application-logs
+YARN_APPLICATION_LOGS_BACKUP_FILE_NAME=yarn-running-application
 
 # Name of the ZIP file contained HDP logs and YARN application logs
 ZIPPED_BACKUP_FILE_NAME="${DATE}-${HOSTNAME}.zip"
@@ -105,7 +106,7 @@ declare -a YARN_APPLICATION_LOGS_FOR_BACKUP
 #########################  Begin  #########################
 
 # Install dependecies
-yum -y install tar zip
+yum -y install tar zip python-pip
 
 # Install awscli
 pip install awscli
@@ -113,12 +114,6 @@ pip install awscli
 # Obtain list of log directories to backup based on system groups
 for system_group in "${HDP_SYSTEM_GROUPS[@]}"
 do
-   # Skip group if it doesn't exist on the host
-   group_count=$(grep -w "${system_group}" /etc/group | wc -l)
-   if [ "${group_count}" -eq "0" ]; then
-       continue
-   fi
-
    # Get logs for curernt system group
    log_dirs=$(find  ${HDP_LOG_BASE_DIR} -maxdepth 1 -type d -group ${system_group})
    
@@ -173,23 +168,43 @@ if [ -d ${YARN_APPLICATION_LOGS_DIR} ]; then
     fi
 fi
 
-# Obtain the HDP Cluster name
+# Obtain the HDP Cluster from ambari-agent logs
 HDP_CLUSTER_NAME="UNKNOWN"
 counter=10
-while [ ${counter} -gt 0 ]
-do
-   # Attempt to get the cluster name form the ambari-agent logs
-   ambari_hdp_cluster_name=$(grep "u'clusterName':" ${AMBARI_AGENT_LOG_DIR}/ambari-agent.log | head -1 | sed "s|,|\n|g" | grep "u'clusterName':" | head -1 | cut -d ":" -f 2 | cut -d "'" -f 2)
-   if [ -z "${ambari_hdp_cluster_name}" ]; then
-       continue
-   else
-       HDP_CLUSTER_NAME=${ambari_hdp_cluster_name}
-       break
-   fi
+if [ -d ${AMBARI_AGENT_LOG_DIR} ]; then
+  while [ ${counter} -gt 0 ]
+  do
+     # Attempt to get the cluster name form the ambari-agent logs
+     ambari_hdp_cluster_name=$(grep "u'clusterName':" ${AMBARI_AGENT_LOG_DIR}/ambari-agent.log* | head -1 | sed "s|,|\n|g" | grep "u'clusterName':" | head -1 | cut -d ":" -f 2 | cut -d "'" -f 2)
+     if [ -z "${ambari_hdp_cluster_name}" ]; then
+         continue
+     else
+         HDP_CLUSTER_NAME=${ambari_hdp_cluster_name}
+         break
+     fi
 
-   counter=$(( $counter - 1 ))
-   sleep 5
+     counter=$(( $counter - 1 ))
+     sleep 5
+  done
+# No ambari-agent on this Host, try getting cluster name from ambari-server
+# This option is for an ambari-server running on an edge with no ambari-agent registered
+else
+  while [ ${counter} -gt 0 ]
+  do
+    # Attempt to get the cluster name form the ambari-server logs
+    ambari_hdp_cluster_name=$(grep "clusterName=" ${AMBARI_SERVER_LOG_DIR}/ambari-server.log* | head -1 | sed "s|,|\n|g" |grep "clusterName=" | head -1 |cut -d "=" -f 2)
+    if [ -z "${ambari_hdp_cluster_name}" ]; then
+         continue
+     else
+         HDP_CLUSTER_NAME=${ambari_hdp_cluster_name}
+         break
+     fi
+
+     counter=$(( $counter - 1 ))
+     sleep 5  
 done
+
+fi
 
 # Create the compressed backup of HDP log files
 tar_command=$( IFS=$' '; echo "tar -zcvf ${TEMP_BACKUP_DIR}/${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz --transform 's,^,${HDP_LOGS_BACKUP_FILE_NAME}/,' -C ${HDP_LOG_BASE_DIR} ${HDP_LOGS_FOR_BACKUP[*]}" )
@@ -223,7 +238,7 @@ export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 aws s3 cp ${TEMP_BACKUP_DIR}/${ZIPPED_BACKUP_FILE_NAME} s3://${AWS_S3_BUCKET}/${AWS_S3_FOLDER_FOR_BACKUPS}/${HDP_CLUSTER_NAME}/
 
 # Cleanup
-#rm -rf ${TEMP_BACKUP_DIR}/${ZIPPED_BACKUP_FILE_NAME} ${TEMP_BACKUP_DIR}/${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz ${TEMP_BACKUP_DIR}/${YARN_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz
+rm -rf ${TEMP_BACKUP_DIR}/${ZIPPED_BACKUP_FILE_NAME} ${TEMP_BACKUP_DIR}/${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz ${TEMP_BACKUP_DIR}/${YARN_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz
 
 # Disable Debug Mode
 set +x
