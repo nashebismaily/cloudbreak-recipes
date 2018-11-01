@@ -26,6 +26,9 @@ AWS_S3_FOLDER_FOR_BACKUPS=
 
 ### HDP Log Information ###
 
+# HDFS SUPERUSER
+HDFS_SUPERUSER=hdfs
+
 # Top level directory to search for HDP logs
 HDP_LOG_BASE_DIR=/var/log
 
@@ -79,11 +82,14 @@ declare -a ROOT_OWNED_LOGS=(
 
 ####################  Internal Variables #####################
 
-# Temporary directory to store the log backups
-TEMP_BACKUP_DIR=/tmp
-
 # Get current data for tar file
 DATE=$(date '+%Y%m%d_%H%M%S')
+
+# Temporary directory to store the log backups
+TEMP_BACKUP_DIR=/tmp/hdp-backup-${DATE}
+
+# Get the fully qualified hostname of the server
+HOSTNAME_FQ=$(hostname -f)
 
 # Get the hostname of the server
 HOSTNAME=$(hostname | cut -d "." -f 1)
@@ -91,8 +97,11 @@ HOSTNAME=$(hostname | cut -d "." -f 1)
 # HDP logs compressed backup filename
 HDP_LOGS_BACKUP_FILE_NAME=hdp-logs
 
-# YARN application compressed backup filename
-YARN_APPLICATION_LOGS_BACKUP_FILE_NAME=yarn-running-application
+# YARN running application compressed backup filename
+YARN_RUNNING_APPLICATION_LOGS_BACKUP_FILE_NAME=yarn-running-application
+
+# YARN historical application compressed backup filename
+YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME=yarn-historical-application
 
 # Name of the ZIP file contained HDP logs and YARN application logs
 ZIPPED_BACKUP_FILE_NAME="${DATE}-${HOSTNAME}.zip"
@@ -103,13 +112,39 @@ declare -a HDP_LOGS_FOR_BACKUP
 # List of YARN application logs for current host
 declare -a YARN_APPLICATION_LOGS_FOR_BACKUP
 
+# List of tars to zip for upload to AWS
+declare -a TARS_FOR_ZIP
+
+# Default hadoop configuration directory
+HADOOP_CONF_DIR=/etc/hadoop/conf
+
+# Hadoop keytab directory
+HADOOP_KEYTAB_DIR=/etc/security/keytabs
+
+# HDFS headles keytab
+HDFS_HEADLESS_KEYTAB=hdfs.headless.keytab
+
+# Hadoop authentiaction property
+HADOOP_AUTH_PROPERTY=hadoop.security.authentication
+
+# Hadoop filesystem property
+HADOOP_FS_PROPERTY=fs.defaultFS
+
+# Hadoop High Availablity property
+HADOOP_HA_PROPERTY=dfs.nameservices
+
+# YARN application logs directory in HDFS
+YARN_APP_LOG_DIR_HDFS=/app-logs
 #########################  Begin  #########################
 
 # Install dependecies
-yum -y install tar zip python-pip
+#yum -y install tar zip python-pip
 
 # Install awscli
-pip install awscli
+#pip install awscli
+
+# Make backup directory
+mkdir -p ${TEMP_BACKUP_DIR} && chmod 777 ${TEMP_BACKUP_DIR}
 
 # Obtain list of log directories to backup based on system groups
 for system_group in "${HDP_SYSTEM_GROUPS[@]}"
@@ -168,6 +203,43 @@ if [ -d ${YARN_APPLICATION_LOGS_DIR} ]; then
     fi
 fi
 
+# Check if kerberos is enabled
+kerberos_enabled=$(grep -A 1 ${HADOOP_AUTH_PROPERTY} ${HADOOP_CONF_DIR}/core-site.xml | grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | grep "kerberos" | wc -l)
+
+# Check if namenode in HA
+namnenode_ha_enabled=$(grep -A 1 ${HADOOP_HA_PROPERTY} ${HADOOP_CONF_DIR}/core-site.xml | wc -l)
+
+#TODO IF HA ENABLED
+
+# NameNode HA not enabled
+if [ "$namnenode_ha_enabled" -eq "0" ]; then
+    namenode_server=$(grep -A1 ${HADOOP_FS_PROPERTY} /etc/hadoop/conf/core-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 2 | sed "s|\/||g")
+fi
+
+
+NAMENODE_SERVER="no"
+# Download the historical YARN application logs from HDFS
+if [ "${HOSTNAME_FQ}" = "${namenode_server}" ]; then
+
+    NAMENODE_SERVER="yes"
+
+    if [ "$kerberos_enabled" -eq "0" ]; then
+        su hdfs -c "hdfs dfs -get ${YARN_APP_LOG_DIR_HDFS} ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}"
+    else
+
+        # Get the hdfs principal
+	hdfs_principal=$(klist -kt ${HADOOP_KEYTAB_DIR}/${HDFS_HEADLESS_KEYTAB} |tail -1 | rev | cut -d ' ' -f 1 | rev)
+        
+	# kinit as hdfs principal
+        kinit -kt ${HADOOP_KEYTAB_DIR}/${HDFS_HEADLESS_KEYTAB} ${hdfs_principal}
+
+        hdfs dfs -get ${YARN_APP_LOG_DIR_HDFS} ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}
+
+	# Destory kerberos ticket
+	kdestroy
+    fi
+fi
+
 # Obtain the HDP Cluster from ambari-agent logs
 HDP_CLUSTER_NAME="UNKNOWN"
 counter=10
@@ -210,22 +282,40 @@ fi
 tar_command=$( IFS=$' '; echo "tar -zcvf ${TEMP_BACKUP_DIR}/${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz --transform 's,^,${HDP_LOGS_BACKUP_FILE_NAME}/,' -C ${HDP_LOG_BASE_DIR} ${HDP_LOGS_FOR_BACKUP[*]}" )
 eval ${tar_command}
 
-# Create the compressed backup of YARN application log files
+# Create the compressed backup of YARN running application log files
 if [ ${#YARN_APPLICATION_LOGS_FOR_BACKUP[@]} -ne 0 ]; then
-    tar_command=$( IFS=$' '; echo "tar -zcvf ${TEMP_BACKUP_DIR}/${YARN_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz --transform 's,^,${YARN_APPLICATION_LOGS_BACKUP_FILE_NAME}/,' -C ${YARN_APPLICATION_LOGS_DIR} ${YARN_APPLICATION_LOGS_FOR_BACKUP[*]}" )
+    tar_command=$( IFS=$' '; echo "tar -zcvf ${TEMP_BACKUP_DIR}/${YARN_RUNNING_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz --transform 's,^,${YARN_RUNNING_APPLICATION_LOGS_BACKUP_FILE_NAME}/,' -C ${YARN_APPLICATION_LOGS_DIR} ${YARN_APPLICATION_LOGS_FOR_BACKUP[*]}" )
     eval ${tar_command}
+fi
+
+# Create the compressed backup of YARN historical application log files
+if [ "${NAMENODE_SERVER}" = "yes" ]; then
+    tar -zcvf ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz -C ${TEMP_BACKUP_DIR} ${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}
+fi
+
+# Add HDP logs to zip
+if [ -f "${TEMP_BACKUP_DIR}/${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz" ]; then
+    TARS_FOR_ZIP+=("${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz")
+fi
+
+# Add YARN running application logs to zip
+if [ -f "${TEMP_BACKUP_DIR}/${YARN_RUNNING_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz" ]; then
+    TARS_FOR_ZIP+=("${YARN_RUNNING_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz")
+fi
+
+# Add YARN historical application logs to zip
+if [ -f "${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz" ]; then
+    TARS_FOR_ZIP+=("${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz")
 fi
 
 # Get current directory
 current_dir=$(pwd)
 
-# Zip only the HDP logs
-if [ ${#YARN_APPLICATION_LOGS_FOR_BACKUP[@]} -eq 0 ]; then
-   cd ${TEMP_BACKUP_DIR} && zip ${ZIPPED_BACKUP_FILE_NAME} ${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz
-# Zip the HDP logs and YARN application logs
-else
-    cd ${TEMP_BACKUP_DIR} && zip ${ZIPPED_BACKUP_FILE_NAME} ${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz ${YARN_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz
-fi
+# Change to temporary directory
+cd ${TEMP_BACKUP_DIR}
+
+# Zip files
+zip ${ZIPPED_BACKUP_FILE_NAME} ${TARS_FOR_ZIP[*]}
 
 # Change back to saved current directory
 cd ${current_dir}
@@ -238,7 +328,7 @@ export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 aws s3 cp ${TEMP_BACKUP_DIR}/${ZIPPED_BACKUP_FILE_NAME} s3://${AWS_S3_BUCKET}/${AWS_S3_FOLDER_FOR_BACKUPS}/${HDP_CLUSTER_NAME}/
 
 # Cleanup
-rm -rf ${TEMP_BACKUP_DIR}/${ZIPPED_BACKUP_FILE_NAME} ${TEMP_BACKUP_DIR}/${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz ${TEMP_BACKUP_DIR}/${YARN_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz
+# rm -rf ${TEMP_BACKUP_DIR}
 
 # Disable Debug Mode
 set +x
