@@ -1,4 +1,4 @@
-## Author: Hortonworks Federal - Professional Services
+## Author: Nasheb Ismaily
 ## 
 ## Description: Searches the HDP base log directory (/var/log) for any directories owned by HDP system groups.
 ##		Creates a list of all log files that need to be backed up.
