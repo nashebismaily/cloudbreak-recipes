@@ -6,8 +6,8 @@
 ##		Tars the logs in the list with the name: hdp-logs.tar.gz
 ##		Searches for running yarn application logs and adds them to the list.
 ##		Tars the logs in the list with the name: yarn-running-application-logs.tar.gz
-##              Searches for historical yarn application logs and adds them to the list.
-##              Tars the logs in the list with the name: yarn-historical-application-logs.tar.gz
+##		Searches for historical yarn application logs and adds them to the list.
+##		Tars the logs in the list with the name: yarn-historical-application-logs.tar.gz
 ##		Zips all tars together as: YYMMDD_HHmmSS-Hostname.zip
 ##		Installs awscli using pip
 ##		Copies zip file to s3 using awscli
