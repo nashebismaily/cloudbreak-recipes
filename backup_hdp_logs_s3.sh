@@ -140,10 +140,10 @@ YARN_APP_LOG_DIR_HDFS=/app-logs
 #########################  Begin  #########################
 
 # Install dependecies
-#yum -y install tar zip python-pip
+yum -y install tar zip python-pip
 
 # Install awscli
-#pip install awscli
+pip install awscli
 
 # Make backup directory
 mkdir -p ${TEMP_BACKUP_DIR} && chmod 777 ${TEMP_BACKUP_DIR}
@@ -330,7 +330,7 @@ export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 aws s3 cp ${TEMP_BACKUP_DIR}/${ZIPPED_BACKUP_FILE_NAME} s3://${AWS_S3_BUCKET}/${AWS_S3_FOLDER_FOR_BACKUPS}/${HDP_CLUSTER_NAME}/
 
 # Cleanup
-# rm -rf ${TEMP_BACKUP_DIR}
+rm -rf ${TEMP_BACKUP_DIR}
 
 # Disable Debug Mode
 set +x
