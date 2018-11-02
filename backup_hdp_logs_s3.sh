@@ -207,7 +207,7 @@ if [ -f "${TEMP_BACKUP_DIR}/${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz" ]; then
     TARS_FOR_ZIP+=("${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz")
 fi
 
-###### YARN Running Application Losg  ######
+###### YARN Running Application Logs  ######
 
 # Add running yarn application logs to backup list
 if [ -d ${YARN_APPLICATION_LOGS_DIR} ]; then
