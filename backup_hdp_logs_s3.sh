@@ -138,10 +138,18 @@ HADOOP_HA_PROPERTY=dfs.nameservices
 # Hadoop High Availability Server 1 Property
 HADOOP_HA_SERVER_1_PROPERTY="dfs.namenode.rpc-address.*.nn1"
 
+# Hadoop High Availability Server 2 Property
+HADOOP_HA_SERVER_2_PROPERTY="dfs.namenode.rpc-address.*.nn2"
+
 # YARN application logs directory in HDFS
 YARN_APP_LOG_DIR_HDFS=/app-logs
 
+# Inital Kerberos cluster state to No
+KERBEROS_ENABLED=0
+
 #########################  Begin  #########################
+
+###### Complete Prerequisites ######
 
 # Install dependecies
 yum -y install tar zip python-pip
@@ -151,6 +159,8 @@ pip install awscli
 
 # Make backup directory
 mkdir -p ${TEMP_BACKUP_DIR} && chmod 777 ${TEMP_BACKUP_DIR}
+
+###### HDP and Ambari System Logs ######
 
 # Obtain list of log directories to backup based on system groups
 for system_group in "${HDP_SYSTEM_GROUPS[@]}"
@@ -188,6 +198,17 @@ do
     HDP_LOGS_FOR_BACKUP=("${HDP_LOGS_FOR_BACKUP[@]}" "${log_dir}")
 done
 
+# Create the compressed backup of HDP log files
+tar_command=$( IFS=$' '; echo "tar -zcvf ${TEMP_BACKUP_DIR}/${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz --transform 's,^,${HDP_LOGS_BACKUP_FILE_NAME}/,' -C ${HDP_LOG_BASE_DIR} ${HDP_LOGS_FOR_BACKUP[*]}" )
+eval ${tar_command}
+
+# Add HDP logs to zip
+if [ -f "${TEMP_BACKUP_DIR}/${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz" ]; then
+    TARS_FOR_ZIP+=("${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz")
+fi
+
+###### YARN Running Application Losg  ######
+
 # Add running yarn application logs to backup list
 if [ -d ${YARN_APPLICATION_LOGS_DIR} ]; then
 
@@ -209,45 +230,95 @@ if [ -d ${YARN_APPLICATION_LOGS_DIR} ]; then
     fi
 fi
 
-# Check if kerberos is enabled
-kerberos_enabled=$(grep -A 1 ${HADOOP_AUTH_PROPERTY} ${HADOOP_CONF_DIR}/core-site.xml | grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | grep "kerberos" | wc -l)
-
-# Check if namenode in HA
-namnenode_ha_enabled=$(grep -A 1 ${HADOOP_HA_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml | wc -l)
-
-# NameNode HA not enabled
-if [ "$namnenode_ha_enabled" -eq "0" ]; then
-    namenode_server=$(grep -A1 ${HADOOP_FS_PROPERTY} ${HADOOP_CONF_DIR}/core-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 2 | sed "s|\/||g")
-# If NameNode HA is enabled
-else
-    namenode_server=$(grep -A1 ${HADOOP_HA_SERVER_1_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 1)
+# Create the compressed backup of YARN running application log files
+if [ ${#YARN_APPLICATION_LOGS_FOR_BACKUP[@]} -ne 0 ]; then
+    tar_command=$( IFS=$' '; echo "tar -zcvf ${TEMP_BACKUP_DIR}/${YARN_RUNNING_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz --transform 's,^,${YARN_RUNNING_APPLICATION_LOGS_BACKUP_FILE_NAME}/,' -C ${YARN_APPLICATION_LOGS_DIR} ${YARN_APPLICATION_LOGS_FOR_BACKUP[*]}" )
+    eval ${tar_command}
 fi
 
-# Download the historical YARN application logs from HDFS
-NAMENODE_SERVER="no"
-if [ "${HOSTNAME_FQ}" = "${namenode_server}" ]; then
-
-    NAMENODE_SERVER="yes"
-
-    # Cluster is NOT kerberized
-    if [ "$kerberos_enabled" -eq "0" ]; then
-        su hdfs -c "hdfs dfs -get ${YARN_APP_LOG_DIR_HDFS} ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}"
-    # Cluster is kerberized
-    else
-
-        # Get the hdfs principal
-	hdfs_principal=$(klist -kt ${HADOOP_KEYTAB_DIR}/${HDFS_HEADLESS_KEYTAB} |tail -1 | rev | cut -d ' ' -f 1 | rev)
-        
-	# kinit as hdfs principal
-        kinit -kt ${HADOOP_KEYTAB_DIR}/${HDFS_HEADLESS_KEYTAB} ${hdfs_principal}
-
-	# Dowload the logs
-        hdfs dfs -get ${YARN_APP_LOG_DIR_HDFS} ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}
-
-	# Destory kerberos ticket
-	kdestroy
-    fi
+# Add YARN running application logs to zip
+if [ -f "${TEMP_BACKUP_DIR}/${YARN_RUNNING_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz" ]; then
+    TARS_FOR_ZIP+=("${YARN_RUNNING_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz")
 fi
+
+###### YARN Historical Logs ######
+
+# HDFS Client exists on this host
+if [ -d ${HADOOP_CONF_DIR} ] ;then
+
+	# Check if kerberos is enabled
+	KERBEROS_ENABLED=$(grep -A 1 ${HADOOP_AUTH_PROPERTY} ${HADOOP_CONF_DIR}/core-site.xml | grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | grep "kerberos" | wc -l)
+
+	# Kinit if kerberos is enabled
+	if [ "${KERBEROS_ENABLED}" -ne "0" ]; then
+	    # Get the hdfs principal
+	    hdfs_principal=$(klist -kt ${HADOOP_KEYTAB_DIR}/${HDFS_HEADLESS_KEYTAB} |tail -1 | rev | cut -d ' ' -f 1 | rev)
+
+	    # kinit as hdfs principal
+	    kinit -kt ${HADOOP_KEYTAB_DIR}/${HDFS_HEADLESS_KEYTAB} ${hdfs_principal}
+	fi
+
+	# Check if namenode in HA
+	namnenode_ha_enabled=$(grep -A 1 ${HADOOP_HA_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml | wc -l)
+
+	# NameNode HA not enabled
+	if [ "$namnenode_ha_enabled" -eq "0" ]; then
+  	  namenode_server=$(grep -A1 ${HADOOP_FS_PROPERTY} ${HADOOP_CONF_DIR}/core-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 2 | sed "s|\/||g")
+	# If NameNode HA is enabled
+	else
+  	  namenode_server_1=$(grep -A1 ${HADOOP_HA_SERVER_1_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 1)
+ 	  namenode_server_2=$(grep -A1 ${HADOOP_HA_SERVER_2_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 1)
+	
+    	# Cluster is NOT kerberized
+    	if [ "${KERBEROS_ENABLED}" -eq "0" ]; then
+       		nn1_active=$(su ${HDFS_SUPERUSER} -c "hdfs haadmin -getServiceState nn1" | grep "active" | wc -l)
+        	nn2_active=$(su ${HDFS_SUPERUSER} -c "hdfs haadmin -getServiceState nn2" | grep "active" | wc -l)
+    	# Cluster is kerberized
+    	else
+        	nn1_active=$(hdfs haadmin -getServiceState nn1 | grep "active" | wc -l)
+        	nn2_active=$(hdfs haadmin -getServiceState nn2 | grep "active" | wc -l)
+    	fi
+    
+    	# NameNode 1 is active
+    	if [ "${nn1_active}" -eq "1" ]; then
+       		namenode_server=${namenode_server_1}    
+    	# NameNode 2 is active
+    	elif [ "${nn2_active}" -eq "1" ]; then 
+        	namenode_server=${namenode_server_2}
+    	# No active NameNodes
+    	else
+       		namenode_server="NONE"
+    	fi
+	fi
+
+	# Download the historical YARN application logs from HDFS
+	NAMENODE_SERVER="no"
+	if [ "${HOSTNAME_FQ}" = "${namenode_server}" ]; then
+
+   		NAMENODE_SERVER="yes"
+
+    	# Cluster is NOT kerberized
+    	if [ "$KERBEROS_ENABLED" -eq "0" ]; then
+        	su ${HDFS_SUPERUSER} -c "hdfs dfs -get ${YARN_APP_LOG_DIR_HDFS} ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}"
+    	# Cluster is kerberized
+    	else
+		# Dowload the logs
+        	hdfs dfs -get ${YARN_APP_LOG_DIR_HDFS} ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}
+   	 	fi
+	fi
+
+	# Create the compressed backup of YARN historical application log files
+	if [ "${NAMENODE_SERVER}" = "yes" ]; then
+    	tar -zcvf ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz -C ${TEMP_BACKUP_DIR} ${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}
+	fi
+
+	# Add YARN historical application logs to zip
+	if [ -f "${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz" ]; then
+    	TARS_FOR_ZIP+=("${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz")
+	fi
+fi
+
+###### Auto-Determine HDP Cluster Name  ######
 
 # Obtain the HDP Cluster from ambari-agent logs
 HDP_CLUSTER_NAME="UNKNOWN"
@@ -286,35 +357,7 @@ else
    done
 fi
 
-# Create the compressed backup of HDP log files
-tar_command=$( IFS=$' '; echo "tar -zcvf ${TEMP_BACKUP_DIR}/${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz --transform 's,^,${HDP_LOGS_BACKUP_FILE_NAME}/,' -C ${HDP_LOG_BASE_DIR} ${HDP_LOGS_FOR_BACKUP[*]}" )
-eval ${tar_command}
-
-# Create the compressed backup of YARN running application log files
-if [ ${#YARN_APPLICATION_LOGS_FOR_BACKUP[@]} -ne 0 ]; then
-    tar_command=$( IFS=$' '; echo "tar -zcvf ${TEMP_BACKUP_DIR}/${YARN_RUNNING_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz --transform 's,^,${YARN_RUNNING_APPLICATION_LOGS_BACKUP_FILE_NAME}/,' -C ${YARN_APPLICATION_LOGS_DIR} ${YARN_APPLICATION_LOGS_FOR_BACKUP[*]}" )
-    eval ${tar_command}
-fi
-
-# Create the compressed backup of YARN historical application log files
-if [ "${NAMENODE_SERVER}" = "yes" ]; then
-    tar -zcvf ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz -C ${TEMP_BACKUP_DIR} ${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}
-fi
-
-# Add HDP logs to zip
-if [ -f "${TEMP_BACKUP_DIR}/${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz" ]; then
-    TARS_FOR_ZIP+=("${HDP_LOGS_BACKUP_FILE_NAME}.tar.gz")
-fi
-
-# Add YARN running application logs to zip
-if [ -f "${TEMP_BACKUP_DIR}/${YARN_RUNNING_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz" ]; then
-    TARS_FOR_ZIP+=("${YARN_RUNNING_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz")
-fi
-
-# Add YARN historical application logs to zip
-if [ -f "${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz" ]; then
-    TARS_FOR_ZIP+=("${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz")
-fi
+###### Create Final Zip File  ######
 
 # Get current directory
 current_dir=$(pwd)
@@ -325,6 +368,8 @@ cd ${TEMP_BACKUP_DIR}
 # Zip files
 zip ${ZIPPED_BACKUP_FILE_NAME} ${TARS_FOR_ZIP[*]}
 
+###### Upload Zip File to AWS S3  ######
+
 # export S3 Credentials
 export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
 export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
@@ -332,11 +377,18 @@ export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 # Load backup to S3
 aws s3 cp ${TEMP_BACKUP_DIR}/${ZIPPED_BACKUP_FILE_NAME} s3://${AWS_S3_BUCKET}/${AWS_S3_FOLDER_FOR_BACKUPS}/${HDP_CLUSTER_NAME}/
 
+###### Cleanup  ######
+
 # Change back to saved current directory
 cd ${current_dir}
 
-# Cleanup
-rm -rf ${TEMP_BACKUP_DIR}
+# Cleanup temporary directory
+#rm -rf ${TEMP_BACKUP_DIR}
+
+# Destory kerberos ticket
+if [ "${KERBEROS_ENABLED}" -ne "0" ]; then
+    kdestroy
+fi
 
 # Disable Debug Mode
 set +x
