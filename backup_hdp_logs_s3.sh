@@ -267,7 +267,7 @@ if [ -d ${HADOOP_CONF_DIR} ] ;then
     # If NameNode HA is enabled
     else
         namenode_server_1=$(grep -A1 ${HADOOP_HA_SERVER_1_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 1)
- 	namenode_server_2=$(grep -A1 ${HADOOP_HA_SERVER_2_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 1)
+        namenode_server_2=$(grep -A1 ${HADOOP_HA_SERVER_2_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 1)
 	
         # Cluster is NOT kerberized
         if [ "${KERBEROS_ENABLED}" -eq "0" ]; then
