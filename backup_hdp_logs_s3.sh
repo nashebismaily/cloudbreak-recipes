@@ -382,7 +382,7 @@ aws s3 cp ${TEMP_BACKUP_DIR}/${ZIPPED_BACKUP_FILE_NAME} s3://${AWS_S3_BUCKET}/${
 cd ${current_dir}
 
 # Cleanup temporary directory
-#rm -rf ${TEMP_BACKUP_DIR}
+rm -rf ${TEMP_BACKUP_DIR}
 
 # Destory kerberos ticket
 if [ "${KERBEROS_ENABLED}" -ne "0" ]; then
