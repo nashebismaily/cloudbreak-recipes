@@ -246,76 +246,75 @@ fi
 # HDFS Client exists on this host
 if [ -d ${HADOOP_CONF_DIR} ] ;then
 
-	# Check if kerberos is enabled
-	KERBEROS_ENABLED=$(grep -A 1 ${HADOOP_AUTH_PROPERTY} ${HADOOP_CONF_DIR}/core-site.xml | grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | grep "kerberos" | wc -l)
+    # Check if kerberos is enabled
+    KERBEROS_ENABLED=$(grep -A 1 ${HADOOP_AUTH_PROPERTY} ${HADOOP_CONF_DIR}/core-site.xml | grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | grep "kerberos" | wc -l)
 
-	# Kinit if kerberos is enabled
-	if [ "${KERBEROS_ENABLED}" -ne "0" ]; then
-	    # Get the hdfs principal
-	    hdfs_principal=$(klist -kt ${HADOOP_KEYTAB_DIR}/${HDFS_HEADLESS_KEYTAB} |tail -1 | rev | cut -d ' ' -f 1 | rev)
+    # Kinit if kerberos is enabled
+    if [ "${KERBEROS_ENABLED}" -ne "0" ]; then
+        # Get the hdfs principal
+	hdfs_principal=$(klist -kt ${HADOOP_KEYTAB_DIR}/${HDFS_HEADLESS_KEYTAB} |tail -1 | rev | cut -d ' ' -f 1 | rev)
 
-	    # kinit as hdfs principal
-	    kinit -kt ${HADOOP_KEYTAB_DIR}/${HDFS_HEADLESS_KEYTAB} ${hdfs_principal}
-	fi
+	# kinit as hdfs principal
+	kinit -kt ${HADOOP_KEYTAB_DIR}/${HDFS_HEADLESS_KEYTAB} ${hdfs_principal}
+    fi
 
-	# Check if namenode in HA
-	namnenode_ha_enabled=$(grep -A 1 ${HADOOP_HA_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml | wc -l)
+    # Check if namenode in HA
+    namnenode_ha_enabled=$(grep -A 1 ${HADOOP_HA_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml | wc -l)
 
-	# NameNode HA not enabled
-	if [ "$namnenode_ha_enabled" -eq "0" ]; then
-  	  namenode_server=$(grep -A1 ${HADOOP_FS_PROPERTY} ${HADOOP_CONF_DIR}/core-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 2 | sed "s|\/||g")
-	# If NameNode HA is enabled
-	else
-  	  namenode_server_1=$(grep -A1 ${HADOOP_HA_SERVER_1_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 1)
- 	  namenode_server_2=$(grep -A1 ${HADOOP_HA_SERVER_2_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 1)
+    # NameNode HA not enabled
+    if [ "$namnenode_ha_enabled" -eq "0" ]; then
+        namenode_server=$(grep -A1 ${HADOOP_FS_PROPERTY} ${HADOOP_CONF_DIR}/core-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 2 | sed "s|\/||g")
+    # If NameNode HA is enabled
+    else
+        namenode_server_1=$(grep -A1 ${HADOOP_HA_SERVER_1_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 1)
+ 	namenode_server_2=$(grep -A1 ${HADOOP_HA_SERVER_2_PROPERTY} ${HADOOP_CONF_DIR}/hdfs-site.xml |grep "<value>" |  sed -n 's:.*<value>\(.*\)</value>.*:\1:p' | cut -d ":" -f 1)
 	
-    	# Cluster is NOT kerberized
-    	if [ "${KERBEROS_ENABLED}" -eq "0" ]; then
-       		nn1_active=$(su ${HDFS_SUPERUSER} -c "hdfs haadmin -getServiceState nn1" | grep "active" | wc -l)
-        	nn2_active=$(su ${HDFS_SUPERUSER} -c "hdfs haadmin -getServiceState nn2" | grep "active" | wc -l)
-    	# Cluster is kerberized
-    	else
-        	nn1_active=$(hdfs haadmin -getServiceState nn1 | grep "active" | wc -l)
-        	nn2_active=$(hdfs haadmin -getServiceState nn2 | grep "active" | wc -l)
-    	fi
+        # Cluster is NOT kerberized
+        if [ "${KERBEROS_ENABLED}" -eq "0" ]; then
+            nn1_active=$(su ${HDFS_SUPERUSER} -c "hdfs haadmin -getServiceState nn1" | grep "active" | wc -l)
+            nn2_active=$(su ${HDFS_SUPERUSER} -c "hdfs haadmin -getServiceState nn2" | grep "active" | wc -l)
+        # Cluster is kerberized
+        else
+            nn1_active=$(hdfs haadmin -getServiceState nn1 | grep "active" | wc -l)
+            nn2_active=$(hdfs haadmin -getServiceState nn2 | grep "active" | wc -l)
+        fi
     
-    	# NameNode 1 is active
-    	if [ "${nn1_active}" -eq "1" ]; then
-       		namenode_server=${namenode_server_1}    
-    	# NameNode 2 is active
-    	elif [ "${nn2_active}" -eq "1" ]; then 
-        	namenode_server=${namenode_server_2}
-    	# No active NameNodes
-    	else
-       		namenode_server="NONE"
-    	fi
-	fi
+        # NameNode 1 is active
+        if [ "${nn1_active}" -eq "1" ]; then
+            namenode_server=${namenode_server_1}    
+        # NameNode 2 is active
+        elif [ "${nn2_active}" -eq "1" ]; then 
+            namenode_server=${namenode_server_2}
+        # No active NameNodes
+        else
+            namenode_server="NONE"
+        fi
+    fi
 
-	# Download the historical YARN application logs from HDFS
-	NAMENODE_SERVER="no"
-	if [ "${HOSTNAME_FQ}" = "${namenode_server}" ]; then
-
-   		NAMENODE_SERVER="yes"
+    # Download the historical YARN application logs from HDFS
+    NAMENODE_SERVER="no"
+    if [ "${HOSTNAME_FQ}" = "${namenode_server}" ]; then
+        NAMENODE_SERVER="yes"
 
     	# Cluster is NOT kerberized
     	if [ "$KERBEROS_ENABLED" -eq "0" ]; then
-        	su ${HDFS_SUPERUSER} -c "hdfs dfs -get ${YARN_APP_LOG_DIR_HDFS} ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}"
+            su ${HDFS_SUPERUSER} -c "hdfs dfs -get ${YARN_APP_LOG_DIR_HDFS} ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}"
     	# Cluster is kerberized
     	else
-		# Dowload the logs
-        	hdfs dfs -get ${YARN_APP_LOG_DIR_HDFS} ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}
-   	 	fi
-	fi
+	    # Dowload the logs
+            hdfs dfs -get ${YARN_APP_LOG_DIR_HDFS} ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}
+   	fi
+    fi
 
-	# Create the compressed backup of YARN historical application log files
-	if [ "${NAMENODE_SERVER}" = "yes" ]; then
-    	tar -zcvf ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz -C ${TEMP_BACKUP_DIR} ${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}
-	fi
+    # Create the compressed backup of YARN historical application log files
+    if [ "${NAMENODE_SERVER}" = "yes" ]; then
+        tar -zcvf ${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz -C ${TEMP_BACKUP_DIR} ${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME} 
+    fi
 
-	# Add YARN historical application logs to zip
-	if [ -f "${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz" ]; then
-    	TARS_FOR_ZIP+=("${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz")
-	fi
+    # Add YARN historical application logs to zip
+    if [ -f "${TEMP_BACKUP_DIR}/${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz" ]; then
+        TARS_FOR_ZIP+=("${YARN_HISTORICAL_APPLICATION_LOGS_BACKUP_FILE_NAME}.tar.gz")
+    fi
 fi
 
 ###### Auto-Determine HDP Cluster Name  ######
